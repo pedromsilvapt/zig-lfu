@@ -2,7 +2,7 @@
 This repository contains an implementation of a Constant Time O(1) Least Frequently Used cache, created as a learning exercise. In LFU caches, items are held up to a certain capacity. When that capacity is reached, any new items will cause the eviction of one of the least frequently used items in memory. This particular implementation, inspired by the article at https://arpitbhayani.me/blogs/lfu, provides constant time for all three main operations: `put`, `get` and `evict`. This constant time comes at the expense of increased memory usage over other alternative approaches, as this LFU requires one hashmap and a special double linked list for function.
 
 ## Requirements
- - Zig v0.6
+ - Zig v0.7
 
 ## Usage
 In this example we will create a LFU cache with a capacity of 3 items. When we add the fourth one, the least used is discarded to make room.

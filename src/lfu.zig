@@ -16,22 +16,22 @@ pub fn StringLFU(comptime V: type) type {
 pub fn LFU(
     comptime K: type,
     comptime V: type,
-    comptime hash: fn (key: K) u32,
+    comptime hash: fn (key: K) u64,
     comptime eql: fn (a: K, b: K) bool,
 ) type {
     return struct {
         allocator: *Allocator,
         hashmap: ItemsHashMap,
         buckets: BucketsLinkedList,
-        capacity: u32,
-        count: u32,
+        capacity: u64,
+        count: u64,
 
         increment_on_put: bool = false,
         increment_on_get: bool = true,
 
         const Self = @This();
 
-        const ItemsHashMap = std.HashMap(K, *Item, hash, eql);
+        const ItemsHashMap = std.HashMap(K, *Item, hash, eql, std.hash_map.DefaultMaxLoadPercentage);
 
         const ItemsLinkedList = std.TailQueue(struct {
             key: K,
@@ -51,7 +51,7 @@ pub fn LFU(
             return .{
                 .allocator = allocator,
                 .hashmap = ItemsHashMap.init(allocator),
-                .buckets = BucketsLinkedList.init(),
+                .buckets = BucketsLinkedList{},
                 .capacity = capacity,
                 .count = 0,
             };
@@ -63,13 +63,18 @@ pub fn LFU(
             var bucket_cursor: ?*Bucket = self.buckets.first;
             var item_cursor: ?*Item = null;
 
-            while (bucket_cursor) |bucket| : (bucket_cursor = bucket.next) {
+            var next_bucket: ?*Bucket = null;
+            var next_item: ?*Item = null;
+
+            while (bucket_cursor) |bucket| : (bucket_cursor = next_bucket) {
                 item_cursor = bucket.data.items.first;
 
-                while (item_cursor) |item| : (item_cursor = item.next) {
+                while (item_cursor) |item| : (item_cursor = next_item) {
+                    next_item = item.next;
                     self.allocator.destroy(item);
                 }
 
+                next_bucket = bucket.next;
                 self.allocator.destroy(bucket);
             }
 
@@ -81,7 +86,7 @@ pub fn LFU(
         }
 
         pub fn put(self: *Self, key: K, value: V) !void {
-            if (self.hashmap.get(key)) |entry| {
+            if (self.hashmap.getEntry(key)) |entry| {
                 entry.value.data.value = value;
 
                 if (self.increment_on_put) {
@@ -105,7 +110,7 @@ pub fn LFU(
         }
 
         pub fn get(self: *Self, key: K) !?V {
-            var item: *Item = self.hashmap.getValue(key) orelse return null;
+            var item: *Item = self.hashmap.get(key) orelse return null;
 
             if (self.increment_on_get) {
                 try self.inc(item);
@@ -115,7 +120,7 @@ pub fn LFU(
         }
 
         pub fn getUses(self: *Self, key: K) ?u32 {
-            var item: *Item = self.hashmap.getValue(key) orelse return null;
+            var item: *Item = self.hashmap.get(key) orelse return null;
 
             var bucket: *Bucket = item.data.bucket orelse return null;
 
@@ -152,10 +157,18 @@ pub fn LFU(
                 }
             }
 
-            var new_bucket: *Bucket = reused orelse try self.buckets.createNode(.{
-                .uses = 0,
-                .items = ItemsLinkedList.init(),
-            }, self.allocator);
+            var new_bucket: *Bucket = reused orelse node: {
+                var ptr = try self.allocator.create(Bucket);
+
+                ptr.* = Bucket{
+                    .data = .{
+                        .uses = 0,
+                        .items = ItemsLinkedList{},
+                    },
+                };
+
+                break :node ptr;
+            };
 
             new_bucket.data.uses = uses;
 
@@ -176,24 +189,28 @@ pub fn LFU(
 
                 self.evictNode(least_used);
 
-                least_used.* = Item.init(.{
-                    .key = key,
-                    .value = value,
-                    // We should retain the old bucket so that it can be reused, 
-                    // if possible. Otherwise, the caller should free it, if empty
-                    .bucket = least_used.data.bucket,
-                });
+                least_used.* = Item{
+                    .data = .{
+                        .key = key,
+                        .value = value,
+                        // We should retain the old bucket so that it can be reused,
+                        // if possible. Otherwise, the caller should free it, if empty
+                        .bucket = least_used.data.bucket,
+                    },
+                };
 
                 return least_used;
             }
 
             var ptr = try self.allocator.create(Item);
 
-            ptr.* = Item.init(.{
-                .key = key,
-                .value = value,
-                .bucket = null,
-            });
+            ptr.* = Item{
+                .data = .{
+                    .key = key,
+                    .value = value,
+                    .bucket = null,
+                },
+            };
 
             return ptr;
         }
@@ -233,9 +250,8 @@ pub fn LFU(
             node.data.bucket = new_bucket;
         }
 
-
         pub fn evict(self: *Self, key: K) ?V {
-            var item = self.hashmap.getValue(key) orelse return null;
+            var item = self.hashmap.get(key) orelse return null;
 
             var value = item.data.value;
 
