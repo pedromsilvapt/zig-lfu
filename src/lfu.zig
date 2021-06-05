@@ -2,22 +2,23 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const fieldInfo = std.meta.fieldInfo;
 
+const AutoContext = std.hash_map.AutoContext;
+const StringContext = std.hash_map.StringContext;
 const getAutoHashFn = std.hash_map.getAutoHashFn;
 const getAutoEqlFn = std.hash_map.getAutoEqlFn;
 
 pub fn AutoLFU(comptime K: type, comptime V: type) type {
-    return LFU(K, V, getAutoHashFn(K), getAutoEqlFn(K));
+    return LFU(K, V, AutoContext(K));
 }
 
 pub fn StringLFU(comptime V: type) type {
-    return LFU([]const u8, V, hashString, eqlString);
+    return LFU([]const u8, V, StringContext);
 }
 
 pub fn LFU(
     comptime K: type,
     comptime V: type,
-    comptime hash: fn (key: K) u64,
-    comptime eql: fn (a: K, b: K) bool,
+    comptime Context: anytype,
 ) type {
     return struct {
         allocator: *Allocator,
@@ -31,7 +32,7 @@ pub fn LFU(
 
         const Self = @This();
 
-        const ItemsHashMap = std.HashMap(K, *Item, hash, eql, std.hash_map.DefaultMaxLoadPercentage);
+        const ItemsHashMap = std.HashMap(K, *Item, Context, std.hash_map.DefaultMaxLoadPercentage);
 
         const ItemsLinkedList = std.TailQueue(struct {
             key: K,
@@ -87,10 +88,10 @@ pub fn LFU(
 
         pub fn put(self: *Self, key: K, value: V) !void {
             if (self.hashmap.getEntry(key)) |entry| {
-                entry.value.data.value = value;
+                entry.value_ptr.*.data.value = value;
 
                 if (self.increment_on_put) {
-                    try self.inc(entry.value);
+                    try self.inc(entry.value_ptr.*);
                 }
             } else {
                 const uses: u32 = if (self.increment_on_put) 1 else 0;
@@ -299,12 +300,12 @@ test "Single cache item" {
     var lfu = BoolLFU.init(std.testing.allocator, 5);
     defer lfu.deinit();
 
-    expect((try lfu.get(1)) == null);
+    try expect((try lfu.get(1)) == null);
     try lfu.put(1, true);
-    expect((try lfu.get(1)) == true);
-    expect((try lfu.get(1)) == true);
-    expect((try lfu.get(1)) == true);
-    expect(lfu.getUses(1).? == 3);
+    try expect((try lfu.get(1)) == true);
+    try expect((try lfu.get(1)) == true);
+    try expect((try lfu.get(1)) == true);
+    try expect(lfu.getUses(1).? == 3);
 }
 
 test "Overflow cache" {
@@ -320,31 +321,31 @@ test "Overflow cache" {
     try lfu.put(5, 50);
 
     // All keys except '3' should have usage == 2
-    expect((try lfu.get(1)).? == 10);
-    expect(lfu.getUses(1).? == 1);
-    expect((try lfu.get(1)).? == 10);
-    expect(lfu.getUses(1).? == 2);
-    expect((try lfu.get(2)).? == 20);
-    expect((try lfu.get(2)).? == 20);
-    expect((try lfu.get(3)).? == 30);
-    expect((try lfu.get(4)).? == 40);
-    expect((try lfu.get(4)).? == 40);
-    expect((try lfu.get(5)).? == 50);
-    expect((try lfu.get(5)).? == 50);
+    try expect((try lfu.get(1)).? == 10);
+    try expect(lfu.getUses(1).? == 1);
+    try expect((try lfu.get(1)).? == 10);
+    try expect(lfu.getUses(1).? == 2);
+    try expect((try lfu.get(2)).? == 20);
+    try expect((try lfu.get(2)).? == 20);
+    try expect((try lfu.get(3)).? == 30);
+    try expect((try lfu.get(4)).? == 40);
+    try expect((try lfu.get(4)).? == 40);
+    try expect((try lfu.get(5)).? == 50);
+    try expect((try lfu.get(5)).? == 50);
 
-    expect(lfu.getUses(1).? == 2);
-    expect(lfu.getUses(3).? == 1);
+    try expect(lfu.getUses(1).? == 2);
+    try expect(lfu.getUses(3).? == 1);
 
     // Putting in key '6' should overwrite '3'
     try lfu.put(6, 60);
 
-    expect((try lfu.get(3)) == null);
-    expect((try lfu.get(6)).? == 60);
-    expect(lfu.getUses(6).? == 1);
-    expect((try lfu.get(6)).? == 60);
-    expect(lfu.getUses(6).? == 2);
-    expect((try lfu.get(6)).? == 60);
-    expect(lfu.getUses(6).? == 3);
+    try expect((try lfu.get(3)) == null);
+    try expect((try lfu.get(6)).? == 60);
+    try expect(lfu.getUses(6).? == 1);
+    try expect((try lfu.get(6)).? == 60);
+    try expect(lfu.getUses(6).? == 2);
+    try expect((try lfu.get(6)).? == 60);
+    try expect(lfu.getUses(6).? == 3);
 }
 
 test "Manual eviction" {
